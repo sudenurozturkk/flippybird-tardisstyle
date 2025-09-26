@@ -1,0 +1,27 @@
+# Build outputs
+**/bin/
+**/obj/
+**/.vs/
+
+# User-specific
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Cache/temporary
+*.pch
+*.pdb
+*.ilk
+*.log
+*.tmp
+*.cache
+
+# Packages
+**/packages/
+*.nupkg
+
+# Others
+*.DS_Store
+Thumbs.db
+
