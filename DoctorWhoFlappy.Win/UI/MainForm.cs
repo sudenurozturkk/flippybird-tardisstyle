@@ -2,7 +2,6 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
-using DoctorWhoFlappy.Win.Game;
 using DoctorWhoFlappy.Win.Properties;
 using System.Reflection;
 using System.Collections.Generic;
@@ -16,7 +15,6 @@ namespace DoctorWhoFlappy.Win.UI
     {
         #region Fields
 
-        private GameLoop _gameLoop;
         private Image _backgroundImage;
         private Image _tardisImage;
         private Image _cybermanImage;
@@ -31,16 +29,20 @@ namespace DoctorWhoFlappy.Win.UI
         const float MAX_FALL = 20f;         // terminal hız daha yüksek
         const int PIPE_SPEED = 12;          // borular daha hızlı
         const int PIPE_WIDTH = 80;
-        int _currentGap = 220; // başlangıç boşluk
+        const int START_GAP = 220;
+        int _currentGap = START_GAP; // başlangıç boşluk
         const int GAP_MIN = 180; // minimum boşluk
         const int PIPE_SPACING = 230; // ardışık pipe'lar arası sabit mesafe (daha sık)
         const int MIN_GAP_CENTER = 140;
         const int BOTTOM_MARGIN = 60;
-        
+
         // Designer'da tanımlı PictureBox referansları (MainForm.Designer.cs)
 
         // Panel için DoubleBuffer helper
         // WinForms'ta Panel.DoubleBuffered internal olduğundan extension ile açıyoruz
+
+        private bool _isPaused = false;
+        private int _highScore = 0;
         #endregion
 
         #region DoubleBuffer Helper
@@ -64,35 +66,17 @@ namespace DoctorWhoFlappy.Win.UI
         public MainForm()
         {
             InitializeComponent();
-            InitializeGame();
-            LoadGameAssets();
             // Flicker (siyah çizgi) engelleme
             this.DoubleBuffered = true;
             EnableDoubleBuffer(gamePanel, true);
             this.SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint, true);
             this.UpdateStyles();
             this.KeyPreview = true;
-            // Panel arkaplanını resimle doldur ki PNG şeffaflık düzgün çalışsın
-            try
-            {
-                string bgPath = System.IO.Path.Combine(Application.StartupPath, "Resources", "background.jpg");
-                if (System.IO.File.Exists(bgPath))
-                    _backgroundImage = Image.FromFile(bgPath);
-            }
-            catch { }
-            gamePanel.BackgroundImage = _backgroundImage;
-            gamePanel.BackgroundImageLayout = ImageLayout.Stretch;
-            
-            // Cyberman görselini pipe'lara bağla (dosyadan)
-            pipeTop.Image = _cybermanImage;
-            pipeBottom.Image = _cybermanImage;
-            pipeTop.SizeMode = PictureBoxSizeMode.StretchImage; // boru gibi doldur, kenarlık bırakma
-            pipeBottom.SizeMode = PictureBoxSizeMode.StretchImage;
-            pipeTop.BorderStyle = BorderStyle.None;
-            pipeBottom.BorderStyle = BorderStyle.None;
-            pipeTop.BackColor = Color.Transparent;
-            pipeBottom.BackColor = Color.Transparent;
-            tardis.BackColor = Color.Transparent;
+
+            LoadGameAssets();
+            InitializeGame();
+            LoadHighScore();
+            ApplyInitialVisualState();
         }
 
         #endregion
@@ -104,19 +88,52 @@ namespace DoctorWhoFlappy.Win.UI
         /// </summary>
         private void InitializeGame()
         {
-            // Oyun döngüsünü oluştur
-            _gameLoop = new GameLoop(gamePanel.Width, gamePanel.Height);
-            
-            // Event'leri bağla
-            _gameLoop.GameStateChanged += OnGameStateChanged;
-            _gameLoop.ScoreChanged += OnScoreChanged;
-            _gameLoop.GameTick += OnGameTick;
-            
-            // Pipe başlangıç konumlarını ayarla (ekranda gözüksün)
-            ResetPipePair(pipeTop, pipeBottom, this.ClientSize.Width + 150);
-            
-            // İlk UI güncellemesi
-            UpdateUI();
+            // Panel arkaplanını resimle doldur ki PNG şeffaflık düzgün çalışsın
+            gamePanel.BackgroundImage = _backgroundImage;
+            gamePanel.BackgroundImageLayout = ImageLayout.Stretch;
+
+            ConfigurePipePictureBox(pipeTop);
+            ConfigurePipePictureBox(pipeBottom);
+            pipeTop.Image = _cybermanImage;
+            pipeBottom.Image = _cybermanImage;
+            pipeTop.BackColor = Color.Transparent;
+            pipeBottom.BackColor = Color.Transparent;
+            tardis.BackColor = Color.Transparent;
+            tardis.Image = _tardisImage;
+
+            gameTimer.Stop();
+            gameTimer.Interval = 20;
+            gameTimer.Tick -= GameTick;
+            gameTimer.Tick += GameTick;
+
+            ResetToIdleState("Press SPACE to start!");
+        }
+
+        private void ApplyInitialVisualState()
+        {
+            UpdateScoreLabel();
+            UpdateHighScoreLabel();
+        }
+
+        private void ResetToIdleState(string message)
+        {
+            running = false;
+            _isPaused = false;
+            gameTimer.Stop();
+            _currentGap = START_GAP;
+
+            InitPipes();
+
+            tardis.Image = _tardisImage;
+            tardis.Left = TARDIS_START_X;
+            tardis.Top = TARDIS_START_Y;
+
+            lblGameState.Text = message;
+            lblGameState.ForeColor = Color.Gold;
+            btnStart.Enabled = true;
+            btnPause.Enabled = false;
+            btnPause.Text = "Pause";
+            btnRestart.Enabled = true;
         }
 
         /// <summary>
@@ -226,47 +243,6 @@ namespace DoctorWhoFlappy.Win.UI
             }
         }
 
-        /// <summary>
-        /// UI elementlerini günceller
-        /// </summary>
-        private void UpdateUI()
-        {
-            // Skor bilgilerini güncelle
-            lblScore.Text = _gameLoop.ScoreManager.GetScoreText();
-            lblHighScore.Text = _gameLoop.ScoreManager.GetHighScoreText();
-            
-            // Oyun durumuna göre mesaj güncelle
-            switch (_gameLoop.CurrentState)
-            {
-                case GameLoop.GameState.Ready:
-                    lblGameState.Text = "Press SPACE to start!";
-                    lblGameState.ForeColor = Color.Gold;
-                    break;
-                    
-                case GameLoop.GameState.Playing:
-                    lblGameState.Text = string.Empty; // oyun başladıktan sonra mesaj kaybolsun
-                    lblGameState.ForeColor = Color.LightGreen;
-                    break;
-                    
-                case GameLoop.GameState.Paused:
-                    lblGameState.Text = "PAUSED - Press SPACE to continue";
-                    lblGameState.ForeColor = Color.Orange;
-                    break;
-                    
-                case GameLoop.GameState.GameOver:
-                    lblGameState.Text = "GAME OVER! Press SPACE to restart";
-                    lblGameState.ForeColor = Color.Red;
-                    break;
-            }
-            
-            // Buton durumlarını güncelle
-            btnStart.Enabled = _gameLoop.CurrentState == GameLoop.GameState.Ready || 
-                              _gameLoop.CurrentState == GameLoop.GameState.GameOver;
-            btnPause.Enabled = _gameLoop.CurrentState == GameLoop.GameState.Playing || 
-                              _gameLoop.CurrentState == GameLoop.GameState.Paused;
-            btnPause.Text = _gameLoop.CurrentState == GameLoop.GameState.Paused ? "Resume" : "Pause";
-        }
-
         #endregion
 
         #region Simple FB loop (UI-only)
@@ -286,21 +262,32 @@ namespace DoctorWhoFlappy.Win.UI
 
         private void StartGame()
         {
-            score = 0; UpdateScoreLabel();
+            _currentGap = START_GAP;
+            score = 0;
+            UpdateScoreLabel();
+
             _velY = 0f;
-            tardis.Image = _tardisImage ?? Resources.tardis;
+            tardis.Image = _tardisImage;
             tardis.Left = TARDIS_START_X;
             tardis.Top = TARDIS_START_Y;
-            pipeTop.Image = _cybermanImage;
-            pipeBottom.Image = _cybermanImage;
+
             InitPipes();
+
             running = true;
+            _isPaused = false;
+
             gameTimer.Stop();
             gameTimer.Interval = 20; // 50 FPS
             gameTimer.Tick -= GameTick;
             gameTimer.Tick += GameTick;
             gameTimer.Start();
+
             lblGameState.Text = string.Empty;
+            lblGameState.ForeColor = Color.LightGreen;
+            btnStart.Enabled = false;
+            btnPause.Enabled = true;
+            btnPause.Text = "Pause";
+            btnRestart.Enabled = true;
         }
 
         private void GameTick(object s, EventArgs e)
@@ -533,7 +520,23 @@ namespace DoctorWhoFlappy.Win.UI
         {
             gameTimer.Stop();
             running = false;
+            _isPaused = false;
+
+            if (score > _highScore)
+            {
+                _highScore = score;
+                SaveHighScore();
+                UpdateHighScoreLabel();
+            }
+
             lblGameState.Text = "GAME OVER! Press SPACE to restart.";
+            lblGameState.ForeColor = Color.Red;
+            btnStart.Enabled = true;
+            btnPause.Enabled = false;
+            btnPause.Text = "Pause";
+
+            MessageBox.Show($"Final Score: {score}\nHigh Score: {_highScore}",
+                "Game Over", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void UpdateScoreLabel()
@@ -541,57 +544,69 @@ namespace DoctorWhoFlappy.Win.UI
             lblScore.Text = "Score: " + score;
         }
 
-        #endregion
-
-        #region Event Handlers
-
-        /// <summary>
-        /// Oyun durumu değiştiğinde çağrılır
-        /// </summary>
-        private void OnGameStateChanged(object sender, GameLoop.GameState newState)
+        private void UpdateHighScoreLabel()
         {
-            if (InvokeRequired)
+            lblHighScore.Text = "High Score: " + _highScore;
+        }
+
+        private void LoadHighScore()
+        {
+            try
             {
-                Invoke(new Action(() => OnGameStateChanged(sender, newState)));
-                return;
+                _highScore = Properties.Settings.Default.HighScore;
             }
-            
-            UpdateUI();
-            
-            // Game over durumunda özet göster
-            if (newState == GameLoop.GameState.GameOver)
+            catch
             {
-                var summary = _gameLoop.ScoreManager.GetGameOverSummary();
-                MessageBox.Show(summary, "Game Over", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                _highScore = 0;
             }
         }
 
-        /// <summary>
-        /// Skor değiştiğinde çağrılır
-        /// </summary>
-        private void OnScoreChanged(object sender, EventArgs e)
+        private void SaveHighScore()
         {
-            if (InvokeRequired)
+            try
             {
-                Invoke(new Action(() => OnScoreChanged(sender, e)));
-                return;
+                Properties.Settings.Default.HighScore = _highScore;
+                Properties.Settings.Default.Save();
             }
-            
-            UpdateUI();
+            catch
+            {
+                // ignore persistence errors
+            }
         }
 
-        /// <summary>
-        /// Oyun tick'inde çağrılır (çizim için)
-        /// </summary>
-        private void OnGameTick(object sender, EventArgs e)
+        private void TogglePause()
         {
-            if (InvokeRequired)
-            {
-                Invoke(new Action(() => OnGameTick(sender, e)));
+            if (!running)
                 return;
-            }
-            // GameTick içinde çizim zorunlu değil; pipes hareketi tek noktadan yapılacak
-            MovePipes();
+
+            if (_isPaused)
+                ResumeGame();
+            else
+                PauseGame();
+        }
+
+        private void PauseGame()
+        {
+            if (!running || _isPaused)
+                return;
+
+            _isPaused = true;
+            gameTimer.Stop();
+            lblGameState.Text = "PAUSED - Press SPACE to continue";
+            lblGameState.ForeColor = Color.Orange;
+            btnPause.Text = "Resume";
+        }
+
+        private void ResumeGame()
+        {
+            if (!running || !_isPaused)
+                return;
+
+            _isPaused = false;
+            lblGameState.Text = string.Empty;
+            lblGameState.ForeColor = Color.LightGreen;
+            gameTimer.Start();
+            btnPause.Text = "Pause";
         }
 
         /// <summary>
@@ -624,18 +639,29 @@ namespace DoctorWhoFlappy.Win.UI
         {
             if (e.KeyCode == Keys.Space)
             {
-                if (!running) { StartGame(); }
-                _velY = JUMP_VELOCITY; // anlık zıplama hissi
+                if (!running)
+                {
+                    StartGame();
+                    _velY = JUMP_VELOCITY;
+                }
+                else
+                {
+                    if (_isPaused)
+                    {
+                        ResumeGame();
+                    }
+                    _velY = JUMP_VELOCITY; // anlık zıplama hissi
+                }
                 e.Handled = true;
             }
             else if (e.KeyCode == Keys.P)
             {
-                _gameLoop.TogglePause();
+                TogglePause();
                 e.Handled = true;
             }
             else if (e.KeyCode == Keys.R)
             {
-                _gameLoop.RestartGame();
+                StartGame();
                 e.Handled = true;
             }
         }
@@ -653,7 +679,7 @@ namespace DoctorWhoFlappy.Win.UI
         /// </summary>
         private void BtnPause_Click(object sender, EventArgs e)
         {
-            _gameLoop.TogglePause();
+            TogglePause();
         }
 
         /// <summary>
@@ -669,8 +695,6 @@ namespace DoctorWhoFlappy.Win.UI
         /// </summary>
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
-            if (_gameLoop != null)
-                _gameLoop.Dispose();
             if (_backgroundImage != null)
                 _backgroundImage.Dispose();
             if (_tardisImage != null)
